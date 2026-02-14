@@ -1,0 +1,74 @@
+# ML Assignment 2 - Loan Default Prediction (Lending Club)
+
+## a) Problem statement
+Build multiple classification models to predict whether a loan will default (Charged Off) or not (Fully Paid).
+Also create a Streamlit app to demo model selection + metrics.
+
+## b) Dataset description
+Dataset: Lending Club loan data (2007-2014)
+File used: `loan_data_2007_2014_New.csv`
+Target:
+- Fully Paid -> 0
+- Charged Off -> 1
+We removed other loan_status values like Current etc.
+
+Min requirements (from assignment): >=12 features and >=500 rows (this dataset satisfies after cleaning).
+
+## c) Models used + Metrics table
+Models (6):
+1. Logistic Regression
+2. Decision Tree
+3. KNN
+4. Naive Bayes (Gaussian)
+5. Random Forest
+6. XGBoost
+
+Metrics calculated:
+Accuracy, AUC, Precision, Recall, F1, MCC
+
+After running `train_models.py`, the table is saved at:
+`saved_models/metrics_table.csv`
+
+(put the table here in final submission by copying the printed output or csv)
+
+| ML Model | Accuracy | AUC | Precision | Recall | F1 | MCC |
+|---|---:|---:|---:|---:|---:|---:|
+| Logistic Regression |  |  |  |  |  |  |
+| Decision Tree |  |  |  |  |  |  |
+| KNN |  |  |  |  |  |  |
+| Naive Bayes |  |  |  |  |  |  |
+| Random Forest |  |  |  |  |  |  |
+| XGBoost |  |  |  |  |  |  |
+
+### Observations (add after you see results)
+| ML Model | Observation about performance |
+|---|---|
+| Logistic Regression | baseline, interpretable, needs scaling |
+| Decision Tree | can overfit, unstable |
+| KNN | depends on scaling and k |
+| Naive Bayes | fast but independence assumption |
+| Random Forest | usually strong, less overfit |
+| XGBoost | often best AUC, needs tuning |
+
+## How to run (BITS Lab)
+1) Put `loan_data_2007_2014_New.csv` in the same folder as `train_models.py`
+2) Install deps:
+```
+pip install -r requirements.txt
+```
+3) Train + save models:
+```
+python train_models.py
+```
+4) Run Streamlit:
+```
+streamlit run app.py
+```
+
+## Links for submission (fill before final PDF)
+- GitHub Repo Link: <paste here>
+- Streamlit App Link: <paste here>
+
+Notes:
+- Streamlit upload should be test data only (small) because free tier is limited.
+- For app metrics, include a `target` column in the uploaded CSV.

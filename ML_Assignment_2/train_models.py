@@ -1,0 +1,250 @@
+"""
+Name : Chandra Shekhar Ruhidas
+BITS ID : 2024dc04198
+
+ML Assignment 2 - LendingClub default prediction
+
+What it does:
+- loads loan_data_2007_2014_New.csv
+- makes binary target from loan_status
+- basic cleaning + encoding
+- trains 6 models
+- saves models + scaler + metrics table to disk
+
+"""
+
+import os
+import re
+import warnings
+import pandas as pd
+import numpy as np
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.ensemble import RandomForestClassifier
+
+from sklearn.metrics import (
+    accuracy_score, roc_auc_score, precision_score, recall_score,
+    f1_score, matthews_corrcoef
+)
+
+import joblib
+
+warnings.filterwarnings("ignore")
+
+DATA_PATH = "loan_data_2007_2014_New.csv"
+OUT_DIR = "saved_models"
+os.makedirs(OUT_DIR, exist_ok=True)
+
+def _to_float_pct(s):
+    # converts "13.56%" -> 13.56 (float)
+    if pd.isna(s):
+        return np.nan
+    if isinstance(s, (int, float, np.number)):
+        return float(s)
+    s = str(s).strip()
+    s = s.replace("%", "")
+    try:
+        return float(s)
+    except:
+        return np.nan
+
+def load_and_clean(path: str) -> pd.DataFrame:
+    df = pd.read_csv(path, low_memory=False)
+
+    # ---- target: keep only Fully Paid / Charged Off ----
+    if "loan_status" not in df.columns:
+        raise ValueError("loan_status column not found. Please check the CSV.")
+
+    df = df[df["loan_status"].isin(["Fully Paid", "Charged Off"])].copy()
+    df["target"] = df["loan_status"].map({"Fully Paid": 0, "Charged Off": 1}).astype(int)
+    df.drop(columns=["loan_status"], inplace=True)
+
+    # ---- drop obvious id-like / text columns if present ----
+    drop_cols = [
+        "id","member_id","url","desc","title","emp_title",
+        "zip_code","addr_state","earliest_cr_line","issue_d","last_pymnt_d",
+        "next_pymnt_d","last_credit_pull_d","pymnt_plan"
+    ]
+    for c in drop_cols:
+        if c in df.columns:
+            df.drop(columns=[c], inplace=True)
+
+    # ---- convert some common percentage columns if present ----
+    for c in ["int_rate", "revol_util"]:
+        if c in df.columns:
+            df[c] = df[c].apply(_to_float_pct)
+
+    # ---- handle missing values ----
+    # Drop columns with too many missing values (>40%)
+    miss_ratio = df.isna().mean()
+    bad_cols = miss_ratio[miss_ratio > 0.40].index.tolist()
+    if bad_cols:
+        df.drop(columns=bad_cols, inplace=True)
+
+    # Fill remaining missing values
+    for col in df.columns:
+        if col == "target":
+            continue
+        if df[col].dtype == "object":
+            # mode for categorical
+            df[col] = df[col].fillna(df[col].mode(dropna=True)[0])
+        else:
+            # median for numeric
+            df[col] = df[col].fillna(df[col].median())
+
+    # ---- basic cleaning for 'term' and 'emp_length' if present ----
+    # term: " 36 months" -> 36
+    if "term" in df.columns:
+        df["term"] = df["term"].astype(str).str.extract(r"(\d+)").astype(int)
+
+    # emp_length: "10+ years" -> 10, "< 1 year" -> 0
+    if "emp_length" in df.columns:
+        def parse_emp(x):
+            x = str(x)
+            if x.strip().startswith("<"):
+                return 0
+            m = re.search(r"(\d+)", x)
+            return int(m.group(1)) if m else 0
+        df["emp_length"] = df["emp_length"].apply(parse_emp)
+
+    return df
+
+def build_features(df: pd.DataFrame):
+    y = df["target"].copy()
+    X = df.drop(columns=["target"])
+
+    # one-hot encode categoricals (simple way)
+    X = pd.get_dummies(X, drop_first=True)
+
+    return X, y
+
+def evaluate(model, X_test, y_test, proba_ok=True):
+    y_pred = model.predict(X_test)
+
+    # for AUC we need probability, if available
+    auc = None
+    if proba_ok and hasattr(model, "predict_proba"):
+        y_prob = model.predict_proba(X_test)[:, 1]
+        auc = roc_auc_score(y_test, y_prob)
+    else:
+        # fallback: use predicted labels (not ideal, but keeps script from crashing)
+        auc = roc_auc_score(y_test, y_pred)
+
+    return {
+        "Accuracy": accuracy_score(y_test, y_pred),
+        "AUC": auc,
+        "Precision": precision_score(y_test, y_pred, zero_division=0),
+        "Recall": recall_score(y_test, y_pred, zero_division=0),
+        "F1": f1_score(y_test, y_pred, zero_division=0),
+        "MCC": matthews_corrcoef(y_test, y_pred)
+    }
+
+def main():
+    print("Loading + cleaning data...")
+    df = load_and_clean(DATA_PATH)
+    X, y = build_features(df)
+
+    print("Dataset shape after cleaning/encoding:", X.shape)
+    if X.shape[0] < 500 or X.shape[1] < 12:
+        print("WARNING: Dataset does not meet assignment constraints after cleaning.")
+        print("Rows:", X.shape[0], "Cols:", X.shape[1])
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+
+    # Scale for LR + KNN + NB (easy)
+    scaler = StandardScaler(with_mean=False)  # with_mean=False works with sparse-like one-hot
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    joblib.dump(scaler, os.path.join(OUT_DIR, "scaler.joblib"))
+
+    print("Training models...")
+
+    models = {}
+
+    # 1) Logistic Regression
+    models["Logistic Regression"] = LogisticRegression(max_iter=2000)
+    models["Logistic Regression"].fit(X_train_scaled, y_train)
+
+    # 2) Decision Tree
+    models["Decision Tree"] = DecisionTreeClassifier(random_state=42)
+    models["Decision Tree"].fit(X_train, y_train)
+
+    # 3) KNN
+    models["KNN"] = KNeighborsClassifier(n_neighbors=7)
+    models["KNN"].fit(X_train_scaled, y_train)
+
+    # 4) Naive Bayes
+    models["Naive Bayes"] = GaussianNB()
+    # GaussianNB needs dense array
+    Xnb_train = X_train_scaled.toarray() if hasattr(X_train_scaled, "toarray") else X_train_scaled
+    models["Naive Bayes"].fit(Xnb_train, y_train)
+
+    # 5) Random Forest
+    models["Random Forest"] = RandomForestClassifier(
+        n_estimators=200, random_state=42, n_jobs=-1
+    )
+    models["Random Forest"].fit(X_train, y_train)
+
+    # 6) XGBoost (if available)
+    try:
+        from xgboost import XGBClassifier
+        models["XGBoost"] = XGBClassifier(
+            n_estimators=300,
+            max_depth=4,
+            learning_rate=0.08,
+            subsample=0.9,
+            colsample_bytree=0.9,
+            eval_metric="logloss",
+            random_state=42
+        )
+        models["XGBoost"].fit(X_train, y_train)
+    except Exception as e:
+        print("XGBoost not available or failed to import:", e)
+        print("Install with: pip install xgboost")
+        models["XGBoost"] = None
+
+    # Evaluate + save
+    rows = []
+    for name, model in models.items():
+        if model is None:
+            continue
+
+        if name in ["Logistic Regression", "KNN"]:
+            res = evaluate(model, X_test_scaled, y_test, proba_ok=True)
+        elif name == "Naive Bayes":
+            Xnb_test = X_test_scaled.toarray() if hasattr(X_test_scaled, "toarray") else X_test_scaled
+            res = evaluate(model, Xnb_test, y_test, proba_ok=True)
+        else:
+            res = evaluate(model, X_test, y_test, proba_ok=True)
+
+        row = {"Model": name, **res}
+        rows.append(row)
+
+        # save model
+        safe_name = name.lower().replace(" ", "_")
+        joblib.dump(model, os.path.join(OUT_DIR, f"{safe_name}.joblib"))
+
+        print(name, "done.")
+
+    results = pd.DataFrame(rows).sort_values(by="AUC", ascending=False)
+    results.to_csv(os.path.join(OUT_DIR, "metrics_table.csv"), index=False)
+
+    # Save columns so app can align uploaded CSV
+    joblib.dump(list(X.columns), os.path.join(OUT_DIR, "feature_columns.joblib"))
+
+    print("\n=== METRICS TABLE ===")
+    print(results)
+
+    print("\nSaved models + metrics in:", OUT_DIR)
+    print("Done.")
+
+if __name__ == "__main__":
+    main()
